@@ -19,6 +19,10 @@ config/features=PackedStringArray("4.2", "GL Compatibility")
 window/size/viewport_height=700
 window/stretch/mode="canvas_items"
 
+[gui]
+
+theme/custom_font="res://fonts/NotoSansKR.ttf"
+
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
