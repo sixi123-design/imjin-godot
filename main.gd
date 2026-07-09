@@ -155,6 +155,9 @@ var SWING_HOLD := 0.12     # 타격 순간 멈칫하는 비율
 var SWING_IDLE := 0.45     # 걸어다닐 때 도구를 든 위상(0~1)
 var SWING_ANG_UP := -1.75  # 치켜든 각도(rad, 음수=위쪽)
 var SWING_ANG_HIT := 0.30  # 내려친 각도(rad, 양수=아래쪽 — 지면을 찍는 느낌)
+# 병사 모집 스폰 — 건물 풋프린트 앞쪽으로 내보내는 거리(px)
+var SPAWN_FRONT := 26.0    # 건물 가장자리에서 더 앞으로
+var SPAWN_SCATTER := 18.0  # 좌우 흩어짐 반경 (SPAWN_FRONT보다 작아야 가려지지 않음)
 const EGRID_CELL := 160.0   # 적 공간 해시 셀 크기(px) — 조준 사거리 기준 튜닝됨
 var enemy_grid := {}
 var win_t := -1.0  # 승리 시네마틱 경과(초), -1 = 비활성
@@ -232,8 +235,8 @@ var TEX := {}
 var TEXW := {}
 var SFX := {}
 var sfx_bus: Node
-var ANCH := {"hq":Vector2(200,296),"wall":Vector2(72,152),"farm":Vector2(128,88),"lumber":Vector2(128,184),
-	"mine":Vector2(72,96),"house":Vector2(125,177),"barracks":Vector2(128,200),"atower":Vector2(88,208),
+var ANCH := {"hq":Vector2(200,296),"wall":Vector2(72,152),"farm":Vector2(128,88),"lumber":Vector2(128,174),
+	"mine":Vector2(72,96),"house":Vector2(125,167),"barracks":Vector2(128,200),"atower":Vector2(88,208),
 	"ctower":Vector2(88,216),"site":Vector2(72,80),"tree":Vector2(56,128),"pine":Vector2(60,152),
 	"u_worker":Vector2(32,72),"u_archer":Vector2(32,72),"u_spear":Vector2(32,72),
 	"u_ashi":Vector2(32,72),"u_gun":Vector2(32,72),"u_sam":Vector2(40,88),
@@ -1022,8 +1025,13 @@ func recruit(t: String) -> void:
 			if b["build"] <= 0.0 and b["type"] == "barracks":
 				bar = b
 				break
+	# 건물 정면(월드 x+y가 커지는 쪽) 아래에 스폰.
+	# 깊이 정렬 키가 x+y라서, 흩어짐 반경보다 앞으로 더 내보내야 건물에 가려지지 않는다.
 	var a := randf() * TAU
-	units.append(_make_unit(t, bar["x"] + cos(a) * 40.0, bar["y"] + 30.0 + sin(a) * 16.0))
+	var sz: float = float(bar["size"]) * TILE * 0.5
+	var sx: float = bar["x"] + cos(a) * SPAWN_SCATTER
+	var sy: float = bar["y"] + sz + SPAWN_FRONT + sin(a) * (SPAWN_SCATTER * 0.45)
+	units.append(_make_unit(t, sx, sy))
 	_sfx("recruit")
 
 func start_wave(w: Dictionary) -> void:
