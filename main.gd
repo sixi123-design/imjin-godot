@@ -148,6 +148,8 @@ var warn_played := false
 var work_sfx_n := 0
 var wave_elapsed := 0.0
 var enrage := 0.0
+const EGRID_CELL := 160.0   # 적 공간 해시 셀 크기(px) — 조준 사거리 기준 튜닝됨
+var enemy_grid := {}
 var win_t := -1.0  # 승리 시네마틱 경과(초), -1 = 비활성
 var restart_btn: Button
 var restart_arm := 0.0
@@ -664,6 +666,7 @@ func make_building(type: String, gx: int, gy: int, instant := false):
 	var b := {"type":type, "gx":gx, "gy":gy, "size":s, "hp":(d["hp"] if bt <= 0.0 else d["hp"] * 0.5),
 		"maxhp":d["hp"], "cd":0.0, "flash":0.0, "ph":randf() * TAU, "st":randf_range(0.0, 2.0),
 		"build":bt, "build_max":max(bt, 0.001), "light":null,
+		"is_wall":(type == "wall" or type == "wall2" or type == "wall3"),
 		"x":(gx + s / 2.0) * TILE, "y":(gy + s / 2.0) * TILE}
 	buildings.append(b)
 	for j in s:
@@ -778,8 +781,13 @@ func occ_at(px: float, py: float):
 	return occ[gy][gx]
 
 func _wall_at(px: float, py: float) -> bool:
-	var b = occ_at(px, py)
-	return b != null and (b["type"] == "wall" or b["type"] == "wall2" or b["type"] == "wall3")
+	# 문자열 비교 대신 생성 시 계산해둔 플래그를 본다 (이동 판정에서 초당 수만 번 호출됨)
+	var gx := int(floor(px / TILE))
+	var gy := int(floor(py / TILE))
+	if gx < 0 or gy < 0 or gx >= GW or gy >= GH:
+		return false
+	var b = occ[gy][gx]
+	return b != null and b.get("is_wall", false)
 
 func _is_defense_building(t: String) -> bool:
 	return t in ["wall", "wall2", "wall3", "atower", "ctower", "btower"]
@@ -1097,14 +1105,65 @@ func nearest_building(x: float, y: float, rad: float):
 			best = b
 	return best
 
+# ---------- 적 공간 해시 ----------
+# 매 sim 틱 한 번만 만들고, 타워·병사 조준과 광역 판정이 함께 쓴다.
+# 죽은 적(hp<=0)은 격자에 남아 있을 수 있으므로 조회할 때 걸러낸다.
+func _build_enemy_grid() -> void:
+	enemy_grid.clear()
+	for e in enemies:
+		var k := Vector2i(int(floor(e["x"] / EGRID_CELL)), int(floor(e["y"] / EGRID_CELL)))
+		var bucket = enemy_grid.get(k)
+		if bucket == null:
+			enemy_grid[k] = [e]
+		else:
+			bucket.append(e)
+
+func _egrid_span(x: float, y: float, rad: float) -> Array:
+	var cr := int(ceil(rad / EGRID_CELL))
+	return [int(floor(x / EGRID_CELL)) - cr, int(floor(y / EGRID_CELL)) - cr, cr * 2 + 1]
+
+# 반경 안의 살아있는 적을 새 배열로 반환 — 순회 중 damage_enemy가 enemies를 건드려도 안전
+func enemies_near(x: float, y: float, rad: float) -> Array:
+	var out := []
+	if enemies.is_empty():
+		return out
+	if enemy_grid.is_empty():
+		_build_enemy_grid()
+	var sp := _egrid_span(x, y, rad)
+	var n: int = sp[2]
+	for oy in range(sp[1], sp[1] + n):
+		for ox in range(sp[0], sp[0] + n):
+			var k := Vector2i(ox, oy)
+			if not enemy_grid.has(k):
+				continue
+			for e in enemy_grid[k]:
+				if e["hp"] <= 0.0:
+					continue
+				if wdist(x, y, e["x"], e["y"]) <= rad:
+					out.append(e)
+	return out
+
 func nearest_enemy(x: float, y: float, rad: float):
+	if enemies.is_empty():
+		return null
+	if enemy_grid.is_empty():
+		_build_enemy_grid()
 	var best = null
 	var bd := rad
-	for e in enemies:
-		var d := wdist(x, y, e["x"], e["y"])
-		if d < bd:
-			bd = d
-			best = e
+	var sp := _egrid_span(x, y, rad)
+	var n: int = sp[2]
+	for oy in range(sp[1], sp[1] + n):
+		for ox in range(sp[0], sp[0] + n):
+			var k := Vector2i(ox, oy)
+			if not enemy_grid.has(k):
+				continue
+			for e in enemy_grid[k]:
+				if e["hp"] <= 0.0:
+					continue
+				var d := wdist(x, y, e["x"], e["y"])
+				if d < bd:
+					bd = d
+					best = e
 	return best
 
 # ---------- 파티클/데칼 (파티클은 화면좌표) ----------
@@ -1165,7 +1224,8 @@ func damage_enemy(e: Dictionary, dmg: float) -> void:
 	e["flash"] = 0.12
 	if randf() < 0.12:
 		_sfx("hit", -10.0, Vector2(e["x"], e["y"]))
-	if e["hp"] <= 0.0 and enemies.has(e):
+	if e["hp"] <= 0.0 and not e.get("dead", false):
+		e["dead"] = true
 		enemies.erase(e)
 		if randf() < 0.5:
 			_sfx("enemy_die", -12.0, Vector2(e["x"], e["y"]))
@@ -1239,6 +1299,7 @@ func sim_update(dt: float) -> void:
 		_clear_temp_mods()
 		if randf() < EVENT_CHANCE:
 			_roll_event()
+	_build_enemy_grid()
 	# 건물
 	for b in buildings:
 		if b["flash"] > 0.0:
@@ -1319,9 +1380,8 @@ func sim_update(dt: float) -> void:
 						# 범위 근접 공격: 반경 내 모든 적 타격
 						u["atk_t"] = 0.3
 						_sfx("slash", -10.0, Vector2(u["x"], u["y"]))
-						for e2 in enemies.duplicate():
-							if wdist(u["x"], u["y"], e2["x"], e2["y"]) <= SPEAR_CLEAVE * TILE:
-								damage_enemy(e2, udmg)
+						for e2 in enemies_near(u["x"], u["y"], SPEAR_CLEAVE * TILE):
+							damage_enemy(e2, udmg)
 						p_blood(e["x"], e["y"], 2)
 					else:
 						if randf() < 0.35:
@@ -1462,10 +1522,9 @@ func sim_update(dt: float) -> void:
 		p["trav"] += step
 		if dd <= step:
 			if p["aoe"] > 0.0:
-				for e2 in enemies.duplicate():
+				for e2 in enemies_near(p["tx"], p["ty"], p["aoe"]):
 					var dd2 := wdist(e2["x"], e2["y"], p["tx"], p["ty"])
-					if dd2 <= p["aoe"]:
-						damage_enemy(e2, p["dmg"] * (1.0 - AOE_FALLOFF * dd2 / p["aoe"]))
+					damage_enemy(e2, p["dmg"] * (1.0 - AOE_FALLOFF * dd2 / p["aoe"]))
 				booms.append({"x":p["tx"], "y":p["ty"], "r":4.0, "max":p["aoe"], "life":0.3})
 				p_spark(p["tx"], p["ty"], 12)
 				p_smoke(p["tx"], p["ty"], 5)
@@ -1563,31 +1622,47 @@ func sim_update(dt: float) -> void:
 
 func _separate_enemies() -> void:
 	# 공간 해시로 O(n) 근사 — 가까운 적끼리만 밀어냄
-	if enemies.size() < 2:
+	# 좌표를 Packed 배열에 미리 뽑아 인덱스로만 돌린다(딕셔너리 문자열 키 접근이 병목이었음)
+	var n := enemies.size()
+	if n < 2:
 		return
-	var cell := ENEMY_SEP
+	var cell: float = ENEMY_SEP
+	var ex := PackedFloat32Array()
+	var ey := PackedFloat32Array()
+	ex.resize(n)
+	ey.resize(n)
 	var grid := {}
-	for e in enemies:
-		var key := Vector2i(int(e["x"] / cell), int(e["y"] / cell))
-		if not grid.has(key):
-			grid[key] = []
-		grid[key].append(e)
-	var sep2 := ENEMY_SEP * ENEMY_SEP
-	for e in enemies:
-		var cx := int(e["x"] / cell)
-		var cy := int(e["y"] / cell)
+	for i in n:
+		var e: Dictionary = enemies[i]
+		var x: float = e["x"]
+		var y: float = e["y"]
+		ex[i] = x
+		ey[i] = y
+		var key := Vector2i(int(x / cell), int(y / cell))
+		var bucket = grid.get(key)
+		if bucket == null:
+			grid[key] = [i]
+		else:
+			bucket.append(i)
+	var sep: float = ENEMY_SEP
+	var sep2 := sep * sep
+	for i in n:
+		var x := ex[i]
+		var y := ey[i]
+		var cx := int(x / cell)
+		var cy := int(y / cell)
 		var px := 0.0
 		var py := 0.0
-		for oy in range(cy - 1, cy + 2):
-			for ox in range(cx - 1, cx + 2):
-				var k := Vector2i(ox, oy)
-				if not grid.has(k):
+		for oy in 3:
+			for ox in 3:
+				var bucket = grid.get(Vector2i(cx + ox - 1, cy + oy - 1))
+				if bucket == null:
 					continue
-				for o in grid[k]:
-					if is_same(o, e):
+				for j in bucket:
+					if j == i:
 						continue
-					var dx: float = e["x"] - o["x"]
-					var dy: float = e["y"] - o["y"]
+					var dx := x - ex[j]
+					var dy := y - ey[j]
 					var d2 := dx * dx + dy * dy
 					if d2 < sep2:
 						if d2 < 0.01:
@@ -1596,13 +1671,14 @@ func _separate_enemies() -> void:
 							py += randf_range(-1.0, 1.0)
 						else:
 							var d := sqrt(d2)
-							var f := (ENEMY_SEP - d) / d * 0.5
+							var f := (sep - d) / d * 0.5
 							px += dx * f
 							py += dy * f
 		if px != 0.0 or py != 0.0:
-			var nx: float = clampf(e["x"] + clampf(px, -3.0, 3.0), 4.0, W - 4.0)
-			var ny: float = clampf(e["y"] + clampf(py, -3.0, 3.0), 4.0, H - 4.0)
+			var nx: float = clampf(x + clampf(px, -3.0, 3.0), 4.0, W - 4.0)
+			var ny: float = clampf(y + clampf(py, -3.0, 3.0), 4.0, H - 4.0)
 			if not _terra_blocked(nx, ny) and not _wall_at(nx, ny):
+				var e: Dictionary = enemies[i]
 				e["x"] = nx
 				e["y"] = ny
 
@@ -1629,6 +1705,8 @@ func _explode_bomber(e: Dictionary) -> void:
 	add_decal(e["x"], e["y"], "scorch", Color.BLACK)
 	add_tmp_light(e["x"], e["y"], 420.0, 0.3, 1.2)
 	shake = minf(shake + 5.0, 9.0)
+	e["dead"] = true
+	e["hp"] = 0.0
 	enemies.erase(e)
 
 func _move(o: Dictionary, tx: float, ty: float, step: float, block_walls := true, foe := false) -> void:
@@ -2223,6 +2301,7 @@ func _do_upgrade() -> void:
 		b["light"].queue_free()
 		b["light"] = null
 	b["type"] = to
+	b["is_wall"] = (to == "wall" or to == "wall2" or to == "wall3")
 	if ns != int(b["size"]) or anchor.x != int(b["gx"]) or anchor.y != int(b["gy"]):
 		for j in b["size"]:
 			for i in b["size"]:
