@@ -148,6 +148,13 @@ var warn_played := false
 var work_sfx_n := 0
 var wave_elapsed := 0.0
 var enrage := 0.0
+# 일꾼 도구 스윙 (한 사이클 = 치켜들기→내려치기→복귀)
+var SWING_HZ := 1.45       # 초당 스윙 횟수
+var SWING_DOWN := 0.30     # 사이클 중 내려치는 구간 비율(가속)
+var SWING_HOLD := 0.12     # 타격 순간 멈칫하는 비율
+var SWING_IDLE := 0.45     # 걸어다닐 때 도구를 든 위상(0~1)
+var SWING_ANG_UP := -1.75  # 치켜든 각도(rad, 음수=위쪽)
+var SWING_ANG_HIT := 0.30  # 내려친 각도(rad, 양수=아래쪽 — 지면을 찍는 느낌)
 const EGRID_CELL := 160.0   # 적 공간 해시 셀 크기(px) — 조준 사거리 기준 튜닝됨
 var enemy_grid := {}
 var win_t := -1.0  # 승리 시네마틱 경과(초), -1 = 비활성
@@ -232,7 +239,9 @@ var ANCH := {"hq":Vector2(200,296),"wall":Vector2(72,152),"farm":Vector2(128,88)
 	"u_ashi":Vector2(32,72),"u_gun":Vector2(32,72),"u_sam":Vector2(40,88),
 	"u_archer2":Vector2(32,72),"u_spear2":Vector2(32,72),
 	"u_worker_farm":Vector2(32,72),"u_worker_lumber":Vector2(32,72),"u_worker_mine":Vector2(32,72),
-	"tile_cliff":Vector2(56,76),"u_lord":Vector2(36,88),"u_bomber":Vector2(32,72),"smith":Vector2(72,128),"btower":Vector2(88,184),"market":Vector2(128,200)}
+	"tile_cliff":Vector2(56,76),"u_lord":Vector2(36,88),"u_bomber":Vector2(32,72),"smith":Vector2(72,128),"btower":Vector2(88,184),"market":Vector2(128,200),
+	# 도구는 손잡이 끝(grip)이 앵커 — art_src/gen_tools.py의 GX,GY와 반드시 일치
+	"tool_hammer":Vector2(5,12),"tool_hoe":Vector2(5,12),"tool_axe":Vector2(5,12),"tool_pick":Vector2(5,12)}
 
 func _ready() -> void:
 	randomize()
@@ -249,7 +258,7 @@ func _ready() -> void:
 		row.resize(GW)
 		occ.append(row)
 	_make_light_tex()
-	for a in ["hq","farm","lumber","mine","house","barracks","atower","ctower","site","tree","pine","tile_g0","tile_g1","tile_g2","tile_dirt","tile_court","tile_ore","tile_mud","tile_cliff","u_worker","u_archer","u_spear","u_ashi","u_gun","u_sam","u_archer2","u_spear2","u_worker_farm","u_worker_lumber","u_worker_mine","u_lord","u_bomber","smith","btower","market","wall","wall2","wall3","icon_food","icon_wood","icon_iron"]:
+	for a in ["hq","farm","lumber","mine","house","barracks","atower","ctower","site","tree","pine","tile_g0","tile_g1","tile_g2","tile_dirt","tile_court","tile_ore","tile_mud","tile_cliff","u_worker","u_archer","u_spear","u_ashi","u_gun","u_sam","u_archer2","u_spear2","u_worker_farm","u_worker_lumber","u_worker_mine","u_lord","u_bomber","smith","btower","market","wall","wall2","wall3","icon_food","icon_wood","icon_iron","tool_hammer","tool_hoe","tool_axe","tool_pick"]:
 		TEX[a] = load("res://art/%s.png" % a)
 	ANCH["wall2"] = ANCH["wall"]
 	ANCH["wall3"] = ANCH["wall"]
@@ -3131,38 +3140,47 @@ func draw_enemy(e: Dictionary) -> void:
 	if e["hp"] < e["maxhp"]:
 		hp_bar(p + Vector2(-36, -d["r"] * 4.0 - 64.0), 72.0, e["hp"] / e["maxhp"], Color("#e74c3c"))
 
+# 도구 스윙 위상 → 0(치켜든 상태) ~ 1(내려친 상태)
+# 등속 sin 대신: 내려칠 때 가속, 타격 순간 멈칫, 되돌릴 때 천천히
+func _swing01(t: float) -> float:
+	var ph := fposmod(t, 1.0)
+	if ph < SWING_DOWN:
+		var k := ph / SWING_DOWN
+		return k * k                                  # 가속 구간
+	if ph < SWING_DOWN + SWING_HOLD:
+		return 1.0                                    # 타격 순간 정지
+	var k2 := (ph - SWING_DOWN - SWING_HOLD) / (1.0 - SWING_DOWN - SWING_HOLD)
+	return 1.0 - smoothstep(0.0, 1.0, k2)             # 감속하며 복귀
+
+func _draw_tool(k: String, pivot: Vector2, s: float, ang: float, sc: float) -> void:
+	# 손잡이 끝(ANCH)을 pivot에 맞추고 회전. s<0이면 좌우 반전(수직축 대칭 = 각도 반전 + x스케일 반전)
+	draw_set_transform(pivot + shake_off, ang if s > 0.0 else -ang, Vector2(sc * s, sc))
+	draw_texture(TEX[k], -ANCH[k])
+	draw_set_transform(shake_off, 0.0, Vector2.ONE)
+
 func draw_worker(wk: Dictionary) -> void:
 	var p := iso(wk["x"], wk["y"])
 	var walking: bool = wk["state"] != "work"
 	var bob: float = sin(game_time * 14.0 + wk["ph"]) * 4.0 if walking else 0.0
 	var task: String = wk["task"]
 	var wtex := "u_worker"
-	var tool := "hammer"
+	var tool := "tool_hammer"
 	if task.begins_with("farm"):
 		wtex = "u_worker_farm"
-		tool = "hoe"
+		tool = "tool_hoe"
 	elif task == "lumber":
 		wtex = "u_worker_lumber"
-		tool = "axe"
+		tool = "tool_axe"
 	elif task == "mine":
 		wtex = "u_worker_mine"
-		tool = "pick"
+		tool = "tool_pick"
 	var sc := 0.8
 	draw_spr_flip(wtex, p, wk["fx"], bob, sc)
 	var s: float = wk["fx"]
-	var sw: float = sin(game_time * 9.0 + wk["ph"]) if wk["state"] == "work" else 0.2
+	# 0 = 치켜든 상태, 1 = 내려친 상태
+	var sw01: float = _swing01(game_time * SWING_HZ + wk["ph"]) if not walking else SWING_IDLE
 	var pivot := p + Vector2(s * 12.0 * sc, (-22.0 + bob) * sc)
-	var ang: float = (-0.9 + sw * 0.7) if s > 0.0 else (PI + 0.9 - sw * 0.7)
-	var tip := pivot + Vector2(cos(ang), sin(ang)) * 26.0 * sc
-	draw_line(pivot, tip, Color("#8a6a44"), 4.0 * sc)
-	if tool == "hammer":
-		draw_rect(Rect2(tip.x - 6.0 * sc, tip.y - 6.0 * sc, 12.0 * sc, 12.0 * sc), Color("#7e7c72"))
-	elif tool == "hoe":
-		draw_line(tip, tip + Vector2(s * 11.0 * sc, 7.0 * sc), Color("#9aa0a8"), 5.0 * sc)
-	elif tool == "axe":
-		draw_colored_polygon(PackedVector2Array([tip, tip + Vector2(s * 13.0 * sc, -5.0 * sc), tip + Vector2(s * 9.0 * sc, 8.0 * sc)]), Color("#b9bcc2"))
-	else:
-		draw_line(tip + Vector2(-8.0 * sc, -4.5 * sc), tip + Vector2(8.0 * sc, 4.5 * sc), Color("#6a7086"), 6.0 * sc)
+	_draw_tool(tool, pivot, s, SWING_ANG_UP + sw01 * (SWING_ANG_HIT - SWING_ANG_UP), sc)
 
 func draw_cliff(cp: Vector2) -> void:
 	draw_texture(TEX["tile_cliff"], iso(cp.x, cp.y) - ANCH["tile_cliff"])
