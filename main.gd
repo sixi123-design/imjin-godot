@@ -235,8 +235,8 @@ var TEX := {}
 var TEXW := {}
 var SFX := {}
 var sfx_bus: Node
-var ANCH := {"hq":Vector2(200,296),"wall":Vector2(72,152),"farm":Vector2(128,88),"lumber":Vector2(128,174),
-	"mine":Vector2(72,96),"house":Vector2(125,167),"barracks":Vector2(128,200),"atower":Vector2(88,208),
+var ANCH := {"hq":Vector2(200,296),"wall":Vector2(72,152),"farm":Vector2(128,88),"lumber":Vector2(128,169),
+	"mine":Vector2(72,96),"house":Vector2(125,162),"barracks":Vector2(128,200),"atower":Vector2(88,208),
 	"ctower":Vector2(88,216),"site":Vector2(72,80),"tree":Vector2(56,128),"pine":Vector2(60,152),
 	"u_worker":Vector2(32,72),"u_archer":Vector2(32,72),"u_spear":Vector2(32,72),
 	"u_ashi":Vector2(32,72),"u_gun":Vector2(32,72),"u_sam":Vector2(40,88),
