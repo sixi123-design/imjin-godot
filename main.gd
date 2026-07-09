@@ -229,6 +229,8 @@ var unit_box: HBoxContainer
 var tab_btns := []
 var sel_building = null
 var up_panel: PanelContainer
+var bot_bar: PanelContainer
+var trade_btns := []   # [버튼, 주는재화, 받는재화, 수량, 받는수량_라벨]
 var up_lbl: Label
 var up_btn: Button
 var mm_img: Image
@@ -1896,7 +1898,8 @@ func _build_ui() -> void:
 	hb.add_child(lbl_day)
 	hb.add_child(lbl_wave)
 	# 하단 건설 바
-	var bot := PanelContainer.new()
+	bot_bar = PanelContainer.new()
+	var bot := bot_bar
 	bot.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	bot.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	bot.add_theme_stylebox_override("panel", _sb(Color(0.14, 0.1, 0.055, 0.95), Color(0.48, 0.36, 0.2), 2, 0))
@@ -1931,7 +1934,9 @@ func _build_ui() -> void:
 	unit_box.add_theme_constant_override("separation", 6)
 	unit_box.visible = false
 	vb0.add_child(unit_box)
-	for t in ["lumber", "farm", "mine", "house", "market", "wall", "wall2", "wall3", "atower", "ctower", "btower", "barracks"]:
+	# 생산 탭: 자원·인구·거래·병력양성 / 방어 탭: 성벽·탑
+	var prod_group := ["lumber", "farm", "mine", "house", "market", "barracks"]
+	for t in prod_group + ["wall", "wall2", "wall3", "atower", "ctower", "btower"]:
 		var d: Dictionary = BDEFS[t]
 		var b := Button.new()
 		b.tooltip_text = "%s\n내구도 %d · 건설 %d초" % [d["desc"], int(d["hp"]), int(d["build"])]
@@ -1939,7 +1944,7 @@ func _build_ui() -> void:
 		_style_button(b)
 		_btn_portrait(b, d["name"], d["cost"], t, Vector2(44, 38))
 		b.pressed.connect(_on_build_pressed.bind(t))
-		if t in ["lumber", "farm", "mine", "house"]:
+		if t in prod_group:
 			build_box.add_child(b)
 		else:
 			def_box.add_child(b)
@@ -1981,10 +1986,12 @@ func _build_ui() -> void:
 	up_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	up_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	up_panel.offset_right = -10
-	up_panel.offset_bottom = -118
+	up_panel.offset_bottom = -118   # _sync_up_panel_pos()가 하단 바 높이에 맞춰 갱신
 	up_panel.add_theme_stylebox_override("panel", _sb(Color(0.14, 0.1, 0.055, 0.95), Color(0.66, 0.5, 0.28), 2, 6))
 	up_panel.visible = false
 	root.add_child(up_panel)
+	bot_bar.resized.connect(_sync_up_panel_pos)
+	_sync_up_panel_pos.call_deferred()
 	var uvb := VBoxContainer.new()
 	up_panel.add_child(uvb)
 	up_lbl = _mk_label("", 14, Color(0.95, 0.9, 0.78))
@@ -2036,15 +2043,19 @@ func _build_ui() -> void:
 	trade_box.visible = false
 	uvb.add_child(trade_box)
 	var pairs := [["wood", "food"], ["food", "wood"], ["wood", "iron"], ["iron", "wood"], ["food", "iron"], ["iron", "food"]]
-	var nm := {"food":"식량", "wood":"목재", "iron":"철"}
+	trade_btns = []
 	for pr in pairs:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		trade_box.add_child(row)
 		for amount in [50, 500]:
 			var tb := Button.new()
-			var out_n: int = amount if mod_flags.get("market_deal", false) else int(amount * 0.6)
-			tb.text = "%s %d -> %s %d" % [nm[pr[0]], amount, nm[pr[1]], out_n]
+			tb.custom_minimum_size = Vector2(124, 30)
 			_style_button(tb)
+			var rl := _trade_btn_content(tb, pr[0], pr[1], amount)
 			tb.pressed.connect(_trade.bind(pr[0], pr[1], amount))
-			trade_box.add_child(tb)
+			row.add_child(tb)
+			trade_btns.append([tb, pr[0], pr[1], amount, rl])
 	# 미니맵 (우상단, 포그 연동, 클릭 이동)
 	var mm_panel := PanelContainer.new()
 	mm_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
@@ -2138,6 +2149,42 @@ func _build_ui() -> void:
 	loadb.pressed.connect(_load_game)
 	sub_hb.add_child(loadb)
 	vb.add_child(sub_hb)
+
+# 거래창을 하단 건설 바 바로 위(철거 버튼 위쪽)에 붙인다.
+# 바 높이는 폰트·해상도에 따라 달라지므로 고정값 대신 실제 높이를 쓴다.
+func _sync_up_panel_pos() -> void:
+	if up_panel != null and bot_bar != null:
+		up_panel.offset_bottom = -(bot_bar.size.y + 8.0)
+
+# 거래 버튼 한 개: [아이콘 50] → [아이콘 30]
+func _trade_btn_content(b: Button, src: String, dst: String, amount: int) -> Label:
+	var hb := HBoxContainer.new()
+	hb.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hb.alignment = BoxContainer.ALIGNMENT_CENTER
+	hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hb.add_theme_constant_override("separation", 4)
+	hb.add_child(_res_icon(src))
+	var gl := _mk_label(str(amount), 13, Color(1, 0.86, 0.62))
+	gl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hb.add_child(gl)
+	var ar := _mk_label("→", 13, Color(0.75, 0.7, 0.6))
+	ar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hb.add_child(ar)
+	hb.add_child(_res_icon(dst))
+	var rl := _mk_label("", 13, Color(0.7, 1.0, 0.72))
+	rl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hb.add_child(rl)
+	b.add_child(hb)
+	return rl
+
+func _res_icon(k: String) -> TextureRect:
+	var ic := TextureRect.new()
+	ic.texture = TEX["icon_" + k]
+	ic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	ic.custom_minimum_size = Vector2(18, 18)
+	ic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return ic
 
 func _btn_portrait(b: Button, title: String, cost: Dictionary, texkey: String, psize: Vector2) -> void:
 	# 기존 스프라이트 초상(위) + 이름/비용(아래) 세로 배치
@@ -2543,8 +2590,16 @@ func _update_hud() -> void:
 		var is_market: bool = bt2 == "market" and sel_building["build"] <= 0.0
 		trade_box.visible = is_market
 		if is_market:
-			var rate := "특가! (50->50 / 500->500)" if mod_flags.get("market_deal", false) else "환율 50->30 / 500->300"
+			var deal: bool = mod_flags.get("market_deal", false)
+			var rate := "특가! (손해 없음)" if deal else "환율 60%"
 			up_lbl.text = "%s  %s" % [BDEFS[bt2]["name"], rate]
+			# 특가 이벤트로 환율이 바뀌므로 받는 수량은 열 때마다 다시 계산한다
+			for e in trade_btns:
+				var give: int = e[3]
+				var get_n: int = give if deal else int(give * 0.6)
+				e[4].text = str(get_n)
+				e[4].add_theme_color_override("font_color", Color(1, 0.86, 0.4) if deal else Color(0.7, 1.0, 0.72))
+				e[0].disabled = res[e[1]] < float(give)
 	else:
 		sel_building = null
 		up_panel.visible = false
