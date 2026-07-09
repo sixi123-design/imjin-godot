@@ -24,9 +24,16 @@ func _process(_delta) -> bool:
 		main.res = {"food":100.0, "wood":100.0, "iron":100.0}
 		main.mod_flags = {}
 		main._trade("wood", "food")
-		print("TRADE: wood=", int(main.res["wood"]), " food=", int(main.res["food"]), " (기대 95/103)")
+		print("TRADE: wood=", int(main.res["wood"]), " food=", int(main.res["food"]), " (기대 50/130)")
+		main.res = {"food":0.0, "wood":500.0, "iron":0.0}
+		main._trade("wood", "iron", 500)
+		print("TRADE_BIG: wood=", int(main.res["wood"]), " iron=", int(main.res["iron"]), " (기대 0/300)")
 		var mk = main.make_building("market", 30, 30, true)
 		print("MARKET: type=", mk["type"], " has=", main.has_market())
+		var before_workers: int = main.workers.size()
+		main.make_building("wall", 34, 30)
+		main.make_building("atower", 36, 30)
+		print("DEF_BUILD_WORKERS: before=", before_workers, " after=", main.workers.size(), " hidden=", main.workers_hidden)
 		# 무한 웨이브 생성
 		main.endless = true
 		main.wave_idx = main.WAVES.size() - 1

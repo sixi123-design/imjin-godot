@@ -56,6 +56,9 @@ var WORK_SFX_MAX := 3           # 생산 작업음 동시 재생 최대 개수 (
 var WORK_SFX_VOL := -16.0       # 생산 작업음 볼륨(dB, 낮을수록 작음)
 var APPROACH_SPREAD := 60.0     # 개체별 접근 오프셋(px) — 클수록 뭉치지 않음
 var ENEMY_SEP := 13.0           # 적끼리 최소 간격(px) — 겹침·한방 전멸 방지
+var ENRAGE_START := 45.0        # 공세 시작 후 이 시간(초) 지나면 광폭화 시작
+var ENRAGE_RATE := 0.06         # 광폭화: 초당 남은 적 공격력 증가율 (누적)
+var ENRAGE_SPD := 0.03          # 광폭화: 초당 이속 증가율 (누적)
 # --- 런타임 상태(모디파이어·난이도가 갱신, 직접 수정 X) ---
 var diff_mult := {"hp":1.0, "count":1.0, "dmg":1.0}   # 난이도 배율
 var mod_flags := {}             # 활성 모디파이어 (refund_full, market_deal, ally_boost, ...)
@@ -74,7 +77,7 @@ var BDEFS := {
 	"barracks": {"name":"훈련소", "hp":260,  "size":2, "build":8.0,  "cost":{"wood":90,"iron":20},   "desc":"정예 병사(편전수·갑사) 해금 · 2×2"},
 	"atower":   {"name":"궁수탑", "hp":260,  "size":1, "build":8.0,  "cost":{"wood":60,"iron":15},   "rng":5.0*TILE,  "dmg":9.0,  "cd":0.75, "desc":"단일 원거리 공격"},
 	"ctower":   {"name":"총통탑", "hp":320,  "size":1, "build":10.0, "cost":{"wood":110,"iron":60},   "rng":6.5*TILE,  "dmg":30.0, "cd":2.4, "aoe":1.4*TILE, "desc":"천자총통 · 범위 폭발"},
-	"market":   {"name":"저잣거리", "hp":180, "size":1, "build":6.0, "cost":{"wood":60,"iron":20}, "desc":"재화 환전(수수료 있음)"},
+	"market":   {"name":"저잣거리", "hp":180, "size":2, "build":6.0, "cost":{"wood":60,"iron":20}, "desc":"재화 환전(수수료 있음) · 2×2"},
 	"btower":   {"name":"진천탑", "hp":550,  "size":1, "build":12.0, "cost":{"wood":220,"iron":260}, "rng":8.5*TILE, "dmg":300.0, "cd":3.0, "aoe":2.4*TILE, "desc":"비격진천뢰 — 후반 정예 처단 · 고가"},
 	"smith":    {"name":"공방",   "hp":240,  "size":2, "build":8.0,  "cost":{"wood":100,"iron":120},  "desc":"연구: 건물/유닛 공·방 강화"},
 	"house2":   {"name":"기와집",   "hp":240, "size":1, "build":6.0, "pop":8, "desc":"병력 상한 +4"},
@@ -114,6 +117,7 @@ var buildings := []
 var units := []
 var enemies := []
 var workers := []
+var workers_hidden := false
 var projs := []
 var spawn_q := []
 var particles := []
@@ -146,9 +150,12 @@ var amb_cur := 0.0
 var hammer_t := 0.0
 var warn_played := false
 var work_sfx_n := 0
+var wave_elapsed := 0.0
+var enrage := 0.0
 var win_t := -1.0  # 승리 시네마틱 경과(초), -1 = 비활성
 var restart_btn: Button
 var restart_arm := 0.0
+var settings_panel: PanelContainer
 var trade_box: VBoxContainer
 var endless := false
 var endless_wave := 0
@@ -159,7 +166,7 @@ var roll_mods := []
 var MODS := {
 	"none":       {"name":"평온한 출정", "desc":"특별한 조짐이 없다."},
 	"refund_full":{"name":"검소한 목수", "desc":"철거 시 자원 100% 회수"},
-	"market_deal":{"name":"보부상의 방문", "desc":"저잣거리 거래가 손해 없이 5→5"},
+	"market_deal":{"name":"보부상의 방문", "desc":"저잣거리 거래가 손해 없이 50→50 / 500→500"},
 	"ally_boost": {"name":"의병의 사기", "desc":"아군 유닛 공격력 2배"},
 	"horde_weak": {"name":"오합지졸", "desc":"적 수 2배, 그러나 피해 절반"},
 	"rich_start": {"name":"조정의 하사품", "desc":"시작 자원 2배"},
@@ -228,7 +235,7 @@ var ANCH := {"hq":Vector2(200,296),"wall":Vector2(72,152),"farm":Vector2(128,88)
 	"house2":Vector2(96,144),"farm2":Vector2(128,88),"atower2":Vector2(88,224),"barracks2":Vector2(128,200),
 	"u_archer2":Vector2(32,72),"u_spear2":Vector2(32,72),
 	"u_worker_farm":Vector2(32,72),"u_worker_lumber":Vector2(32,72),"u_worker_mine":Vector2(32,72),
-	"tile_cliff":Vector2(56,76),"u_lord":Vector2(36,88),"u_bomber":Vector2(32,72),"smith":Vector2(72,128),"btower":Vector2(88,184),"market":Vector2(80,144)}
+	"tile_cliff":Vector2(56,76),"u_lord":Vector2(36,88),"u_bomber":Vector2(32,72),"smith":Vector2(72,128),"btower":Vector2(88,184),"market":Vector2(128,200)}
 
 func _ready() -> void:
 	randomize()
@@ -490,10 +497,8 @@ func has_market() -> bool:
 			return true
 	return false
 
-func _trade(src: String, dst: String) -> void:
-	# 5 src → dst (특가 모디파이어면 손해 없음, 아니면 수수료로 3만 받음)
-	var give_n := 5
-	var get_n: int = 5 if mod_flags.get("market_deal", false) else 3
+func _trade(src: String, dst: String, give_n := 50) -> void:
+	var get_n: int = give_n if mod_flags.get("market_deal", false) else int(give_n * 0.6)
 	if res[src] < give_n:
 		log_msg("%s이(가) 부족합니다." % {"food":"식량","wood":"목재","iron":"철"}[src])
 		return
@@ -683,7 +688,7 @@ func make_building(type: String, gx: int, gy: int, instant := false):
 	reveal(b["x"], b["y"], rv)
 	if bt <= 0.0:
 		finish_building(b)
-	else:
+	elif not _is_defense_building(type):
 		_spawn_workers_for(b)
 	return b
 
@@ -787,6 +792,9 @@ func _wall_at(px: float, py: float) -> bool:
 	var b = occ_at(px, py)
 	return b != null and (b["type"] == "wall" or b["type"] == "wall2" or b["type"] == "wall3")
 
+func _is_defense_building(t: String) -> bool:
+	return t in ["wall", "wall2", "wall3", "atower", "atower2", "ctower", "btower"]
+
 func _terra_blocked(px: float, py: float) -> bool:
 	var gx := int(floor(px / TILE))
 	var gy := int(floor(py / TILE))
@@ -850,6 +858,25 @@ func _spawn_workers_for(b: Dictionary) -> void:
 	var n := 2 if b["build_max"] > 5.0 else 1
 	for i in n:
 		workers.append(_make_worker(b, "build"))
+
+func _set_workers_hidden(v: bool) -> void:
+	if workers_hidden == v:
+		return
+	workers_hidden = v
+	if v:
+		for wk in workers:
+			wk["state"] = "walk"
+			wk["tx"] = hq["x"] + randf_range(-20, 20)
+			wk["ty"] = hq["y"] + 30.0
+	else:
+		for wk in workers:
+			var home: Dictionary = wk["home"]
+			wk["x"] = hq["x"] + randf_range(-18, 18)
+			wk["y"] = hq["y"] + 30.0 + randf_range(-6, 6)
+			wk["state"] = "walk"
+			wk["tx"] = home["x"] + randf_range(-9, 9)
+			wk["ty"] = home["y"] + randf_range(3, 12)
+			wk["fx"] = 1.0 if wk["tx"] > wk["x"] else -1.0
 
 func _update_workers(dt: float) -> void:
 	work_sfx_n = 0
@@ -946,7 +973,7 @@ func _roll_event() -> void:
 		"market_deal":
 			mod_flags["market_deal"] = true
 			show_banner("보부상 방문 — 저잣거리 거래가 특가로!")
-			log_msg("[이벤트] 보부상: 다음 공세까지 거래 5→5")
+			log_msg("[이벤트] 보부상: 다음 공세까지 거래 50→50 / 500→500")
 		"refund":
 			mod_flags["refund_full"] = true
 			show_banner("검소한 목수 — 철거 시 자원 전액 회수!")
@@ -1013,6 +1040,7 @@ func start_wave(w: Dictionary) -> void:
 			delay += SPAWN_GAP_FINAL if w.has("final") else SPAWN_GAP
 	var sname: String = "사방" if w.has("final") else SIDE_NAME[int(w["side"])]
 	_sfx("wave_start")
+	_set_workers_hidden(true)
 	show_banner("왜군 총공세다! 전군 배치하라!" if w.has("final") else "제%d차 공세 — %s에서 %s" % [wave_idx + 1, sname, wave_comp_str(w)])
 	log_msg("제%d차 공세 시작 (%s)" % [wave_idx + 1, sname])
 
@@ -1187,13 +1215,22 @@ func sim_update(dt: float) -> void:
 	var w = next_wave()
 	if w != null and cur_day() >= int(w["day"]) and spawn_q.is_empty() and not w.has("started"):
 		w["started"] = true
+		wave_elapsed = 0.0
+		enrage = 0.0
 		start_wave(w)
+	var wave_active: bool = w != null and w.has("started") and (not spawn_q.is_empty() or not enemies.is_empty())
+	if wave_active:
+		wave_elapsed += dt
+		enrage = maxf(0.0, wave_elapsed - ENRAGE_START)
+	else:
+		enrage = 0.0
 	for i in range(spawn_q.size() - 1, -1, -1):
 		spawn_q[i]["t"] -= dt
 		if spawn_q[i]["t"] <= 0.0:
 			spawn_enemy(spawn_q[i]["type"], spawn_q[i]["side"], float(spawn_q[i].get("fr", -1.0)))
 			spawn_q.remove_at(i)
 	if w != null and w.has("started") and spawn_q.is_empty() and enemies.is_empty():
+		_set_workers_hidden(false)
 		wave_idx += 1
 		if wave_idx >= WAVES.size():
 			if endless:
@@ -1355,7 +1392,7 @@ func sim_update(dt: float) -> void:
 				exploders.append(e)
 			elif e["cd"] <= 0.0:
 				e["cd"] = d["cd"]
-				var edmg: float = float(e.get("dmg", d["dmg"]))
+				var edmg: float = float(e.get("dmg", d["dmg"])) * (1.0 + ENRAGE_RATE * enrage)
 				if e["bf"]:
 					edmg *= LORD_DMG_BUFF
 				if float(d["rng"]) > TILE:
@@ -1380,7 +1417,7 @@ func sim_update(dt: float) -> void:
 			if probe != null and probe != t:
 				e["target"] = probe
 			else:
-				var spd2: float = float(d["spd"]) * (LORD_SPD_BUFF if bool(e.get("bf", false)) else 1.0)
+				var spd2: float = float(d["spd"]) * (LORD_SPD_BUFF if bool(e.get("bf", false)) else 1.0) * (1.0 + ENRAGE_SPD * enrage)
 				if enemies.size() <= 3:
 					e["ghost_t"] = 0.5  # 극소수 잔당은 장애물 무시 직행 (소프트락 방지)
 				if e.get("ghost_t", 0.0) > 0.0:
@@ -1513,24 +1550,27 @@ func sim_update(dt: float) -> void:
 		fog_t = 0.6
 		for u2 in units:
 			reveal(u2["x"], u2["y"], 6)
-		for wk2 in workers:
-			reveal(wk2["x"], wk2["y"], 5)
+		if not workers_hidden:
+			for wk2 in workers:
+				reveal(wk2["x"], wk2["y"], 5)
 	# 건설 중 망치 소리 (주기적, 건설 일꾼이 실제 두드리는 중일 때)
 	hammer_t -= dt
 	if hammer_t <= 0.0:
 		var building_now := false
 		var hammer_pos := Vector2.ZERO
-		for wk in workers:
-			if wk["task"] == "build" and wk["state"] == "work":
-				building_now = true
-				hammer_pos = Vector2(wk["x"], wk["y"])
-				break
+		if not workers_hidden:
+			for wk in workers:
+				if wk["task"] == "build" and wk["state"] == "work":
+					building_now = true
+					hammer_pos = Vector2(wk["x"], wk["y"])
+					break
 		if building_now:
 			_sfx("hammer", -6.0, Vector2(hammer_pos))
 			hammer_t = 0.55
 		else:
 			hammer_t = 0.2
-	_update_workers(dt)
+	if not workers_hidden:
+		_update_workers(dt)
 
 func _separate_enemies() -> void:
 	# 공간 해시로 O(n) 근사 — 가까운 적끼리만 밀어냄
@@ -1743,16 +1783,11 @@ func _build_ui() -> void:
 	_style_button(all_btn)
 	all_btn.pressed.connect(_select_all_units)
 	hb.add_child(all_btn)
-	restart_btn = Button.new()
-	restart_btn.text = "재시작"
-	_style_button(restart_btn)
-	restart_btn.pressed.connect(_on_restart_pressed)
-	hb.add_child(restart_btn)
-	var saveb := Button.new()
-	saveb.text = "저장"
-	_style_button(saveb)
-	saveb.pressed.connect(_save_game)
-	hb.add_child(saveb)
+	var setb := Button.new()
+	setb.text = "⚙ 설정"
+	_style_button(setb)
+	setb.pressed.connect(_toggle_settings)
+	hb.add_child(setb)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hb.add_child(spacer)
@@ -1859,17 +1894,57 @@ func _build_ui() -> void:
 	_style_button(up_btn)
 	up_btn.pressed.connect(_do_upgrade)
 	uvb.add_child(up_btn)
+	# 설정 패널 (재시작·저장·불러오기·닫기)
+	settings_panel = PanelContainer.new()
+	settings_panel.set_anchors_preset(Control.PRESET_CENTER)
+	settings_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	settings_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	settings_panel.add_theme_stylebox_override("panel", _sb(Color(0.12, 0.09, 0.05, 0.98), Color(0.66, 0.5, 0.28), 2, 8))
+	settings_panel.visible = false
+	root.add_child(settings_panel)
+	var svb := VBoxContainer.new()
+	svb.add_theme_constant_override("separation", 8)
+	settings_panel.add_child(svb)
+	var stitle := _mk_label("설정", 22, Color(1, 0.85, 0.48))
+	stitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	svb.add_child(stitle)
+	restart_btn = Button.new()
+	restart_btn.text = "재시작"
+	restart_btn.custom_minimum_size = Vector2(200, 34)
+	_style_button(restart_btn)
+	restart_btn.pressed.connect(_on_restart_pressed)
+	svb.add_child(restart_btn)
+	var s_save := Button.new()
+	s_save.text = "저장"
+	s_save.custom_minimum_size = Vector2(200, 34)
+	_style_button(s_save)
+	s_save.pressed.connect(_save_game)
+	svb.add_child(s_save)
+	var s_load := Button.new()
+	s_load.text = "불러오기"
+	s_load.custom_minimum_size = Vector2(200, 34)
+	_style_button(s_load)
+	s_load.pressed.connect(_load_game)
+	svb.add_child(s_load)
+	var s_close := Button.new()
+	s_close.text = "닫기 (계속하기)"
+	s_close.custom_minimum_size = Vector2(200, 34)
+	_style_button(s_close)
+	s_close.pressed.connect(_toggle_settings)
+	svb.add_child(s_close)
 	trade_box = VBoxContainer.new()
 	trade_box.visible = false
 	uvb.add_child(trade_box)
-	var pairs := [["wood", "food"], ["food", "wood"], ["wood", "iron"], ["food", "iron"], ["iron", "wood"]]
+	var pairs := [["wood", "food"], ["food", "wood"], ["wood", "iron"], ["iron", "wood"], ["food", "iron"], ["iron", "food"]]
 	var nm := {"food":"식량", "wood":"목재", "iron":"철"}
 	for pr in pairs:
-		var tb := Button.new()
-		tb.text = "%s 5 → %s" % [nm[pr[0]], nm[pr[1]]]
-		_style_button(tb)
-		tb.pressed.connect(_trade.bind(pr[0], pr[1]))
-		trade_box.add_child(tb)
+		for amount in [50, 500]:
+			var tb := Button.new()
+			var out_n: int = amount if mod_flags.get("market_deal", false) else int(amount * 0.6)
+			tb.text = "%s %d -> %s %d" % [nm[pr[0]], amount, nm[pr[1]], out_n]
+			_style_button(tb)
+			tb.pressed.connect(_trade.bind(pr[0], pr[1], amount))
+			trade_box.add_child(tb)
 	# 미니맵 (우상단, 포그 연동, 클릭 이동)
 	var mm_panel := PanelContainer.new()
 	mm_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
@@ -2259,7 +2334,17 @@ func _load_game() -> void:
 	paused = false
 	game_started = true
 	intro_t = 0.0
+	settings_panel.visible = false
 	log_msg("불러왔습니다.")
+
+func _toggle_settings() -> void:
+	_sfx("menu")
+	settings_panel.visible = not settings_panel.visible
+	# 설정 열면 일시정지
+	if settings_panel.visible:
+		if game_started and not game_over:
+			paused = true
+			pause_btn.text = "재개"
 
 func _on_restart_pressed() -> void:
 	if restart_arm > 0.0:
@@ -2312,7 +2397,10 @@ func _update_hud() -> void:
 	if w == null:
 		lbl_wave.text = "모든 공세 격퇴!"
 	elif w.has("started") or not spawn_q.is_empty() or not enemies.is_empty():
-		lbl_wave.text = "제%d차 공세 진행 중! (적 %d)" % [wave_idx + 1, enemies.size() + spawn_q.size()]
+		var etxt := "제%d차 공세 진행 중! (적 %d)" % [wave_idx + 1, enemies.size() + spawn_q.size()]
+		if enrage > 0.0:
+			etxt += "  ⚔광폭화 +%d%%" % int(ENRAGE_RATE * enrage * 100.0)
+		lbl_wave.text = etxt
 	else:
 		var remain: float = float(w["day"]) * DAY_LEN - DAY_LEN - game_time
 		var sname: String = "사방" if w.has("final") else SIDE_NAME[int(w["side"])]
@@ -2353,7 +2441,7 @@ func _update_hud() -> void:
 		var is_market: bool = bt2 == "market" and sel_building["build"] <= 0.0
 		trade_box.visible = is_market
 		if is_market:
-			var rate := "특가! (5→5)" if mod_flags.get("market_deal", false) else "환율 5→3 (수수료)"
+			var rate := "특가! (50->50 / 500->500)" if mod_flags.get("market_deal", false) else "환율 50->30 / 500->300"
 			up_lbl.text = "%s  %s" % [BDEFS[bt2]["name"], rate]
 	else:
 		sel_building = null
@@ -2991,21 +3079,22 @@ func draw_worker(wk: Dictionary) -> void:
 	elif task == "mine":
 		wtex = "u_worker_mine"
 		tool = "pick"
-	draw_spr_flip(wtex, p, wk["fx"], bob)
+	var sc := 0.8
+	draw_spr_flip(wtex, p, wk["fx"], bob, sc)
 	var s: float = wk["fx"]
 	var sw: float = sin(game_time * 9.0 + wk["ph"]) if wk["state"] == "work" else 0.2
-	var pivot := p + Vector2(s * 12.0, -22.0 + bob)
+	var pivot := p + Vector2(s * 12.0 * sc, (-22.0 + bob) * sc)
 	var ang: float = (-0.9 + sw * 0.7) if s > 0.0 else (PI + 0.9 - sw * 0.7)
-	var tip := pivot + Vector2(cos(ang), sin(ang)) * 26.0
-	draw_line(pivot, tip, Color("#8a6a44"), 4.0)
+	var tip := pivot + Vector2(cos(ang), sin(ang)) * 26.0 * sc
+	draw_line(pivot, tip, Color("#8a6a44"), 4.0 * sc)
 	if tool == "hammer":
-		draw_rect(Rect2(tip.x - 6.0, tip.y - 6.0, 12.0, 12.0), Color("#7e7c72"))
+		draw_rect(Rect2(tip.x - 6.0 * sc, tip.y - 6.0 * sc, 12.0 * sc, 12.0 * sc), Color("#7e7c72"))
 	elif tool == "hoe":
-		draw_line(tip, tip + Vector2(s * 11.0, 7.0), Color("#9aa0a8"), 5.0)
+		draw_line(tip, tip + Vector2(s * 11.0 * sc, 7.0 * sc), Color("#9aa0a8"), 5.0 * sc)
 	elif tool == "axe":
-		draw_colored_polygon(PackedVector2Array([tip, tip + Vector2(s * 13.0, -5.0), tip + Vector2(s * 9.0, 8.0)]), Color("#b9bcc2"))
+		draw_colored_polygon(PackedVector2Array([tip, tip + Vector2(s * 13.0 * sc, -5.0 * sc), tip + Vector2(s * 9.0 * sc, 8.0 * sc)]), Color("#b9bcc2"))
 	else:
-		draw_line(tip + Vector2(-8.0, -4.5), tip + Vector2(8.0, 4.5), Color("#6a7086"), 6.0)
+		draw_line(tip + Vector2(-8.0 * sc, -4.5 * sc), tip + Vector2(8.0 * sc, 4.5 * sc), Color("#6a7086"), 6.0 * sc)
 
 func draw_cliff(cp: Vector2) -> void:
 	draw_texture(TEX["tile_cliff"], iso(cp.x, cp.y) - ANCH["tile_cliff"])
@@ -3053,12 +3142,13 @@ func _draw() -> void:
 		items.append([u["x"] + u["y"], 2, u])
 	for e in enemies:
 		items.append([e["x"] + e["y"], 3, e])
-	for wk in workers:
-		var wkey: float = wk["x"] + wk["y"]
-		if wk["state"] == "work":
-			var hb: Dictionary = wk["home"]
-			wkey = hb["x"] + hb["y"] + (hb["size"] - 1) * TILE * 0.75 + 0.5
-		items.append([wkey, 4, wk])
+	if not workers_hidden:
+		for wk in workers:
+			var wkey: float = wk["x"] + wk["y"]
+			if wk["state"] == "work":
+				var hb: Dictionary = wk["home"]
+				wkey = hb["x"] + hb["y"] + (hb["size"] - 1) * TILE * 0.75 + 0.5
+			items.append([wkey, 4, wk])
 	for cp in cliffs:
 		items.append([cp.x + cp.y, 5, cp])
 	items.sort_custom(func(a, b): return a[0] < b[0])
