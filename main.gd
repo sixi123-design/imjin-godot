@@ -80,10 +80,6 @@ var BDEFS := {
 	"market":   {"name":"저잣거리", "hp":180, "size":2, "build":6.0, "cost":{"wood":60,"iron":20}, "desc":"재화 환전(수수료 있음) · 2×2"},
 	"btower":   {"name":"진천탑", "hp":550,  "size":1, "build":12.0, "cost":{"wood":220,"iron":260}, "rng":8.5*TILE, "dmg":300.0, "cd":3.0, "aoe":2.4*TILE, "desc":"비격진천뢰 — 후반 정예 처단 · 고가"},
 	"smith":    {"name":"공방",   "hp":240,  "size":2, "build":8.0,  "cost":{"wood":100,"iron":120},  "desc":"연구: 건물/유닛 공·방 강화"},
-	"house2":   {"name":"기와집",   "hp":240, "size":1, "build":6.0, "pop":8, "desc":"병력 상한 +4"},
-	"farm2":    {"name":"논",       "hp":140, "size":2, "build":5.0, "prod":{"food":2.1}, "desc":"식량 +2.1/초 · 2×2"},
-	"atower2":  {"name":"수성 망루", "hp":420, "size":1, "build":8.0, "rng":6.2*TILE, "dmg":17.0, "cd":0.62, "desc":"강화 궁수탑"},
-	"barracks2":{"name":"훈련도감", "hp":380, "size":2, "build":9.0, "desc":"정예 병사 해금 · 2×2"},
 }
 var UPGR := {}
 var UDEFS := {
@@ -232,7 +228,6 @@ var ANCH := {"hq":Vector2(200,296),"wall":Vector2(72,152),"farm":Vector2(128,88)
 	"ctower":Vector2(88,216),"site":Vector2(72,80),"tree":Vector2(56,128),"pine":Vector2(60,152),
 	"u_worker":Vector2(32,72),"u_archer":Vector2(32,72),"u_spear":Vector2(32,72),
 	"u_ashi":Vector2(32,72),"u_gun":Vector2(32,72),"u_sam":Vector2(40,88),
-	"house2":Vector2(96,144),"farm2":Vector2(128,88),"atower2":Vector2(88,224),"barracks2":Vector2(128,200),
 	"u_archer2":Vector2(32,72),"u_spear2":Vector2(32,72),
 	"u_worker_farm":Vector2(32,72),"u_worker_lumber":Vector2(32,72),"u_worker_mine":Vector2(32,72),
 	"tile_cliff":Vector2(56,76),"u_lord":Vector2(36,88),"u_bomber":Vector2(32,72),"smith":Vector2(72,128),"btower":Vector2(88,184),"market":Vector2(128,200)}
@@ -252,7 +247,7 @@ func _ready() -> void:
 		row.resize(GW)
 		occ.append(row)
 	_make_light_tex()
-	for a in ["hq","farm","lumber","mine","house","barracks","atower","ctower","site","tree","pine","tile_g0","tile_g1","tile_g2","tile_dirt","tile_court","tile_ore","tile_mud","tile_cliff","u_worker","u_archer","u_spear","u_ashi","u_gun","u_sam","house2","farm2","atower2","barracks2","u_archer2","u_spear2","u_worker_farm","u_worker_lumber","u_worker_mine","u_lord","u_bomber","smith","btower","market","wall","wall2","wall3","icon_food","icon_wood","icon_iron"]:
+	for a in ["hq","farm","lumber","mine","house","barracks","atower","ctower","site","tree","pine","tile_g0","tile_g1","tile_g2","tile_dirt","tile_court","tile_ore","tile_mud","tile_cliff","u_worker","u_archer","u_spear","u_ashi","u_gun","u_sam","u_archer2","u_spear2","u_worker_farm","u_worker_lumber","u_worker_mine","u_lord","u_bomber","smith","btower","market","wall","wall2","wall3","icon_food","icon_wood","icon_iron"]:
 		TEX[a] = load("res://art/%s.png" % a)
 	ANCH["wall2"] = ANCH["wall"]
 	ANCH["wall3"] = ANCH["wall"]
@@ -520,13 +515,7 @@ func has_smith() -> bool:
 
 func has_barracks() -> bool:
 	for b in buildings:
-		if (b["type"] == "barracks" or b["type"] == "barracks2") and b["build"] <= 0.0:
-			return true
-	return false
-
-func has_barracks2() -> bool:
-	for b in buildings:
-		if b["type"] == "barracks2" and b["build"] <= 0.0:
+		if b["type"] == "barracks" and b["build"] <= 0.0:
 			return true
 	return false
 
@@ -683,7 +672,7 @@ func make_building(type: String, gx: int, gy: int, instant := false):
 	var rv := 7
 	if type == "hq":
 		rv = 13
-	elif type == "atower" or type == "ctower" or type == "atower2" or type == "btower":
+	elif type == "atower" or type == "ctower" or type == "btower":
 		rv = 10
 	reveal(b["x"], b["y"], rv)
 	if bt <= 0.0:
@@ -703,15 +692,15 @@ func finish_building(b: Dictionary) -> void:
 		l.energy = 0.0
 		var r := 380.0
 		if t == "hq": r = 600.0
-		elif t == "house" or t == "house2": r = 220.0
-		elif t == "barracks" or t == "barracks2": r = 300.0
+		elif t == "house": r = 220.0
+		elif t == "barracks": r = 300.0
 		l.texture_scale = r / 128.0
 		l.position = iso(b["x"], b["y"]) + Vector2(0, -24)
 		add_child(l)
 		b["light"] = l
 	_sfx("build", 0.0, Vector2(b["x"], b["y"]))
 	# 생산 건물에는 상주 일꾼
-	if t in ["farm", "farm2", "lumber", "mine"]:
+	if t in ["farm", "lumber", "mine"]:
 		workers.append(_make_worker(b, t))
 
 func remove_building(b: Dictionary) -> void:
@@ -793,7 +782,7 @@ func _wall_at(px: float, py: float) -> bool:
 	return b != null and (b["type"] == "wall" or b["type"] == "wall2" or b["type"] == "wall3")
 
 func _is_defense_building(t: String) -> bool:
-	return t in ["wall", "wall2", "wall3", "atower", "atower2", "ctower", "btower"]
+	return t in ["wall", "wall2", "wall3", "atower", "ctower", "btower"]
 
 func _terra_blocked(px: float, py: float) -> bool:
 	var gx := int(floor(px / TILE))
@@ -902,7 +891,7 @@ func _update_workers(dt: float) -> void:
 			if float(wk["st2"]) <= 0.0:
 				wk["st2"] = randf_range(0.7, 1.3)
 				var wsnd := ""
-				if wk["task"] == "farm" or wk["task"] == "farm2":
+				if wk["task"] == "farm":
 					wsnd = "hoe"
 				elif wk["task"] == "mine":
 					wsnd = "pick"
@@ -939,7 +928,7 @@ func _place_snd(t: String) -> String:
 		return "place_tower"
 	elif t in ["house", "barracks"]:
 		return "place_house"
-	elif t in ["farm", "farm2"]:
+	elif t == "farm":
 		return "place_farm"
 	elif t == "lumber":
 		return "place_lumber"
@@ -1013,7 +1002,7 @@ func recruit(t: String) -> void:
 	var bar = hq
 	if tier2:
 		for b in buildings:
-			if b["build"] <= 0.0 and (b["type"] == "barracks" or b["type"] == "barracks2"):
+			if b["build"] <= 0.0 and b["type"] == "barracks":
 				bar = b
 				break
 	var a := randf() * TAU
@@ -1276,7 +1265,7 @@ func sim_update(dt: float) -> void:
 			b["st"] -= dt
 			if b["st"] <= 0.0:
 				b["st"] = randf_range(1.1, 2.6)
-				p_chimney(b["x"] + randf_range(-4, 4), b["y"], 56.0 if b["type"] == "house" or b["type"] == "house2" else 120.0)
+				p_chimney(b["x"] + randf_range(-4, 4), b["y"], 56.0 if b["type"] == "house" else 120.0)
 		if d.has("rng"):
 			b["cd"] -= dt
 			if b["cd"] <= 0.0:
@@ -2487,7 +2476,7 @@ func _update_minimap() -> void:
 			bc = Color(0.66, 0.64, 0.58)
 		elif t == "wall3":
 			bc = Color(0.55, 0.6, 0.75)
-		elif t == "atower" or t == "atower2" or t == "ctower":
+		elif t == "atower" or t == "ctower":
 			bc = Color(0.95, 0.55, 0.25)
 		for j in b["size"]:
 			for i in b["size"]:
@@ -2799,13 +2788,13 @@ func draw_building(b: Dictionary) -> void:
 		_flag(c + Vector2(0, -284), 40.0, 22.0, Color("#2456a0"), b["ph"])
 		if amb > 0.18:
 			ell(c + Vector2(48, -72), 12.0, 16.0, Color(1, 0.75, 0.35, minf(0.6, amb)))
-	elif t == "atower" or t == "atower2":
+	elif t == "atower":
 		_flame(c + Vector2(-40, -104), 4.8, b["ph"])
 		if amb > 0.18:
 			ell(c + Vector2(44, -88), 7.2, 8.8, Color(1, 0.6, 0.3, minf(0.7, amb + 0.2)))
 	elif (t == "ctower" or t == "btower") and b["cd"] > float(BDEFS[t]["cd"]) - 0.15:
 		draw_circle(c + Vector2(48, -100) if t == "ctower" else Vector2(4, -120), 14.0 if t == "ctower" else 20.0, Color(1, 0.86, 0.47, 0.9))
-	elif (t == "house" or t == "house2") and amb > 0.18:
+	elif t == "house" and amb > 0.18:
 		ell(c + Vector2(28, -12), 8.8, 11.2, Color(1, 0.75, 0.35, minf(0.55, amb)))
 	if b["flash"] > 0.0:
 		draw_texture(_white_of(t), c - ANCH[t], Color(1, 1, 1, minf(1.0, b["flash"] * 6.0)))

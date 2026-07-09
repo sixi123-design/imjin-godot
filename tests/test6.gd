@@ -35,7 +35,7 @@ func _process(_delta) -> bool:
 		var br = main.make_building("barracks", 33, 22, true)
 		print("SIZE2: farm=", f["size"], " barracks=", br["size"], " occ=", main.occ[f["gy"] + 1][f["gx"] + 1] == f and main.occ[br["gy"] + 1][br["gx"] + 1] == br)
 		# 정예 전투: 갑사 근접 추격+타격, 편전수 화살
-		main.make_building("barracks2", 26, 18, true)
+		main.make_building("barracks", 26, 18, true)
 		var s2 = main._make_unit("spear2", 30.0 * 22.0, 30.0 * 22.0)
 		s2["ox"] = s2["x"]
 		s2["oy"] = s2["y"]
